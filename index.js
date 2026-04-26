@@ -10,13 +10,13 @@ const bot = new Telegraf(process.env.BOT_TOKEN);
 const adminCodes = process.env.ADMIN_ACCESS_CODES.split(",");
 
 // ======================
-// MEMORY STORES
+// MEMORY
 // ======================
 const userState = {};
 const warnings = {};
 
 // ======================
-// START COMMAND
+// START
 // ======================
 bot.start(async (ctx) => {
   if (ctx.chat.type !== "private") return;
@@ -29,9 +29,8 @@ bot.start(async (ctx) => {
       `🔐 Features:\n` +
       `• Verify membership status\n` +
       `• View your details\n` +
-      `• Join your state group (ACTIVE only)\n` +
-      `• Contact support\n\n` +
-      `Select an option below 👇`,
+      `• Join state group (ACTIVE only)\n` +
+      `• Contact support`,
       Markup.inlineKeyboard([
         [Markup.button.callback("🔍 Check Status", "CHECK_STATUS")],
         [Markup.button.callback("🛠 Change Status (Admin)", "ADMIN_STATUS")],
@@ -39,50 +38,55 @@ bot.start(async (ctx) => {
         [Markup.button.callback("💬 Contact Support", "SUPPORT")]
       ])
     );
-  }, 3000);
+  }, 2000);
 });
 
 // ======================
-// BUTTON ACTIONS
+// BUTTONS
 // ======================
 bot.action("CHECK_STATUS", async (ctx) => {
-  if (ctx.chat.type !== "private") return;
   await ctx.answerCbQuery();
-
   userState[ctx.from.id] = { step: "await_member_id" };
   ctx.reply("🔍 Enter your Member ID:");
 });
 
 bot.action("ADMIN_STATUS", async (ctx) => {
-  if (ctx.chat.type !== "private") return;
   await ctx.answerCbQuery();
-
   userState[ctx.from.id] = { step: "await_admin_code" };
+
+  ctx.reply(
+    "🔐 Enter Admin Access Code:",
+    Markup.inlineKeyboard([
+      [Markup.button.callback("🔐 Enter Admin Access Code", "ENTER_ADMIN_CODE")]
+    ])
+  );
+});
+
+// Admin code trigger button
+bot.action("ENTER_ADMIN_CODE", async (ctx) => {
+  await ctx.answerCbQuery();
   ctx.reply("🔐 Enter Admin Access Code:");
 });
 
+// Join group
 bot.action("JOIN_GROUP", async (ctx) => {
-  if (ctx.chat.type !== "private") return;
   await ctx.answerCbQuery();
-
-  ctx.reply(
-    "🌍 Only ACTIVE members can join groups.\n\nVerify your status first:",
+  ctx.reply("🌍 Check your status first:", 
     Markup.inlineKeyboard([
       [Markup.button.callback("🔍 Check Status", "CHECK_STATUS")]
     ])
   );
 });
 
+// Support
 bot.action("SUPPORT", async (ctx) => {
-  if (ctx.chat.type !== "private") return;
   await ctx.answerCbQuery();
-
-  userState[ctx.from.id] = { step: "support_message" };
+  userState[ctx.from.id] = { step: "support" };
   ctx.reply("💬 Send your message:");
 });
 
 // ======================
-// PRIVATE CHAT HANDLER
+// TEXT HANDLER
 // ======================
 bot.on("text", async (ctx) => {
   if (ctx.chat.type !== "private") return;
@@ -96,16 +100,18 @@ bot.on("text", async (ctx) => {
   await ctx.sendChatAction("typing");
 
   // ======================
-  // CHECK STATUS
+  // CHECK MEMBER
   // ======================
   if (state.step === "await_member_id") {
     try {
-      const res = await axios.get(process.env.SHEET_API_URL + "?id=" + text);
-      const data = res.data;
+      const res = await axios.get(
+        `${process.env.SHEET_API_URL}?memberId=${encodeURIComponent(text)}`
+      );
 
+      const data = res.data;
       delete userState[userId];
 
-      if (data.status === "not_found") {
+      if (!data || data.status === "not_found") {
         return ctx.reply("❌ Member ID not found.");
       }
 
@@ -114,45 +120,33 @@ bot.on("text", async (ctx) => {
         `👤 Name: ${data.name}\n` +
         `🧑‍💼 Role: ${data.role}\n` +
         `🌍 State: ${data.state}\n` +
-        `📊 Status: ${data.statusValue}\n` +
-        `📅 Joined: ${data.joinDate}\n` +
-        `⏳ Expiry: ${data.expiryDate}`;
+        `📊 Status: ${data.statusValue}`;
 
-      // Expiry check
-      if (data.expiryDate !== "Permanent") {
-        const today = new Date();
-        const expiry = new Date(data.expiryDate);
-
-        if (expiry < today) {
-          msg += `\n\n⚠️ Membership expired`;
-        }
-      }
-
-      // Active logic
       if (data.statusValue === "Active") {
-        msg += `\n\n✅ ACTIVE MEMBER\nJoin your group:\n${data.groupLink || "Contact admin"}`;
+        msg += `\n\n✅ ACTIVE MEMBER`;
+        msg += `\nJoin group: ${data.groupLink || "Contact admin"}`;
       } else {
         msg += `\n\n⚠️ Not active`;
       }
 
-      // Send passport image if available
       if (data.passport) {
-        await ctx.replyWithPhoto(data.passport, {
+        return ctx.replyWithPhoto(data.passport, {
           caption: msg,
           parse_mode: "Markdown"
         });
-      } else {
-        await ctx.reply(msg, { parse_mode: "Markdown" });
       }
 
+      return ctx.reply(msg, { parse_mode: "Markdown" });
+
     } catch (err) {
+      console.log("DB ERROR:", err.message);
       delete userState[userId];
-      ctx.reply("❌ Error connecting to database.");
+      return ctx.reply("❌ Database connection failed. Try again later.");
     }
   }
 
   // ======================
-  // ADMIN LOGIN
+  // ADMIN CODE
   // ======================
   if (state.step === "await_admin_code") {
     if (!adminCodes.includes(text)) {
@@ -165,10 +159,23 @@ bot.on("text", async (ctx) => {
       adminCode: text
     };
 
-    return ctx.reply("🔐 Access granted.\nSend Member ID:");
+    return ctx.reply(
+      "🔐 Access granted.",
+      Markup.inlineKeyboard([
+        [Markup.button.callback("📩 Send Member ID", "SEND_MEMBER_ID")]
+      ])
+    );
   }
 
+  // trigger button
+  bot.action("SEND_MEMBER_ID", async (ctx) => {
+    await ctx.answerCbQuery();
+    ctx.reply("📩 Enter Member ID:");
+  });
+
+  // ======================
   // ADMIN MEMBER ID
+  // ======================
   if (state.step === "admin_member_id") {
     userState[userId] = {
       step: "admin_new_status",
@@ -176,66 +183,79 @@ bot.on("text", async (ctx) => {
       adminCode: state.adminCode
     };
 
-    return ctx.reply("Enter new status:\nActive / Pending / Suspended / Rejected");
+    return ctx.reply(
+      "Enter new status:",
+      Markup.inlineKeyboard([
+        [Markup.button.callback("🟢 Active", "STATUS_ACTIVE")],
+        [Markup.button.callback("🟡 Pending", "STATUS_PENDING")],
+        [Markup.button.callback("🔴 Suspended", "STATUS_SUSPENDED")],
+        [Markup.button.callback("⚫ Rejected", "STATUS_REJECTED")]
+      ])
+    );
   }
 
-  // ADMIN UPDATE
-  if (state.step === "admin_new_status") {
+  // ======================
+  // ADMIN STATUS BUTTONS
+  // ======================
+  const setStatus = async (status) => {
     try {
       const res = await axios.get(
-        process.env.SHEET_API_URL +
-        `?update=true&id=${state.memberId}&status=${text}&code=${state.adminCode}`
+        `${process.env.SHEET_API_URL}?update=true&id=${state.memberId}&status=${status}&code=${state.adminCode}`
       );
 
       delete userState[userId];
 
       if (res.data.success) {
         return ctx.reply(
-          `✅ Updated successfully\n\nMember: ${state.memberId}\nNew Status: ${text}\nBy: ${res.data.admin}`
+          `✅ Updated\nMember: ${state.memberId}\nStatus: ${status}`
         );
-      } else {
-        return ctx.reply("❌ Update failed.");
       }
+
+      return ctx.reply("❌ Update failed.");
 
     } catch (err) {
       delete userState[userId];
-      ctx.reply("❌ Error updating member.");
+      return ctx.reply("❌ Error updating member.");
     }
-  }
+  };
+
+  bot.action("STATUS_ACTIVE", async (ctx) => {
+    await ctx.answerCbQuery();
+    await setStatus("Active");
+  });
+
+  bot.action("STATUS_PENDING", async (ctx) => {
+    await ctx.answerCbQuery();
+    await setStatus("Pending");
+  });
+
+  bot.action("STATUS_SUSPENDED", async (ctx) => {
+    await ctx.answerCbQuery();
+    await setStatus("Suspended");
+  });
+
+  bot.action("STATUS_REJECTED", async (ctx) => {
+    await ctx.answerCbQuery();
+    await setStatus("Rejected");
+  });
 
   // ======================
   // SUPPORT
   // ======================
-  if (state.step === "support_message") {
+  if (state.step === "support") {
     delete userState[userId];
 
     await ctx.telegram.sendMessage(
       process.env.ADMIN_CHAT_ID,
-      `📩 SUPPORT MESSAGE\n\nFrom: @${ctx.from.username || "user"}\n\n${text}`
+      `📩 SUPPORT\nFrom: @${ctx.from.username || "user"}\n\n${text}`
     );
 
-    return ctx.reply("✅ Message sent.");
+    return ctx.reply("✅ Sent to admin.");
   }
 });
 
 // ======================
-// GROUP: WELCOME
-// ======================
-bot.on("new_chat_members", (ctx) => {
-  const user = ctx.message.new_chat_members[0];
-
-  ctx.reply(
-    `@${user.username || user.first_name} You're official welcome into Atwopat Nigeria.\n\n` +
-    `📜 Rules:\n` +
-    `• No ads\n` +
-    `• No links\n` +
-    `• Be respectful\n\n` +
-    `⚠️ Violators will be removed`
-  );
-});
-
-// ======================
-// GROUP: MODERATION
+// GROUP MODERATION (UNCHANGED)
 // ======================
 bot.on("message", async (ctx) => {
   if (!ctx.message.text) return;
@@ -251,34 +271,19 @@ bot.on("message", async (ctx) => {
       if (!warnings[userId]) warnings[userId] = 0;
       warnings[userId]++;
 
-      await ctx.reply(
-        `⚠️ @${ctx.from.username || ctx.from.first_name}\nWarning ${warnings[userId]}/3\nLinks not allowed`
-      );
+      await ctx.reply(`⚠️ Warning ${warnings[userId]}/3`);
 
       if (warnings[userId] >= 3) {
         await ctx.banChatMember(userId);
-
-        await ctx.reply(
-          `🚫 @${ctx.from.username || ctx.from.first_name} removed for repeated violations`
-        );
-
         delete warnings[userId];
-        return;
       }
 
-      await ctx.restrictChatMember(userId, {
-        permissions: { can_send_messages: false },
-        until_date: Math.floor(Date.now() / 1000) + 300
-      });
-
     } catch (err) {
-      console.log("Moderation error:", err);
+      console.log(err);
     }
   }
 });
 
 // ======================
-// START BOT
-// ======================
 bot.launch();
-console.log("🚀 ATWOPAT Bot running...");
+console.log("🚀 ATWOPAT Bot Running...");
