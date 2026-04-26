@@ -1,7 +1,20 @@
 require("dotenv").config();
+const express = require("express"); // ✅ ADDED
 const { Telegraf, Markup } = require("telegraf");
 const axios = require("axios");
 
+// ======================
+// EXPRESS SERVER (KEEP ALIVE)
+// ======================
+const app = express();
+
+app.get("/ping", (req, res) => {
+  res.status(200).send("alive");
+});
+
+// ======================
+// BOT INIT
+// ======================
 const bot = new Telegraf(process.env.BOT_TOKEN);
 
 // ======================
@@ -62,23 +75,21 @@ bot.action("ADMIN_STATUS", async (ctx) => {
   );
 });
 
-// Admin code trigger button
 bot.action("ENTER_ADMIN_CODE", async (ctx) => {
   await ctx.answerCbQuery();
   ctx.reply("🔐 Enter Admin Access Code:");
 });
 
-// Join group
 bot.action("JOIN_GROUP", async (ctx) => {
   await ctx.answerCbQuery();
-  ctx.reply("🌍 Check your status first:", 
+  ctx.reply(
+    "🌍 Check your status first:",
     Markup.inlineKeyboard([
       [Markup.button.callback("🔍 Check Status", "CHECK_STATUS")]
     ])
   );
 });
 
-// Support
 bot.action("SUPPORT", async (ctx) => {
   await ctx.answerCbQuery();
   userState[ctx.from.id] = { step: "support" };
@@ -167,14 +178,22 @@ bot.on("text", async (ctx) => {
     );
   }
 
-  // trigger button
-  bot.action("SEND_MEMBER_ID", async (ctx) => {
-    await ctx.answerCbQuery();
-    ctx.reply("📩 Enter Member ID:");
-  });
+  // ======================
+  // SUPPORT
+  // ======================
+  if (state.step === "support") {
+    delete userState[userId];
+
+    await ctx.telegram.sendMessage(
+      process.env.ADMIN_CHAT_ID,
+      `📩 SUPPORT\nFrom: @${ctx.from.username || "user"}\n\n${text}`
+    );
+
+    return ctx.reply("✅ Sent to admin.");
+  }
 
   // ======================
-  // ADMIN MEMBER ID
+  // ADMIN FLOW
   // ======================
   if (state.step === "admin_member_id") {
     userState[userId] = {
@@ -193,69 +212,62 @@ bot.on("text", async (ctx) => {
       ])
     );
   }
-
-  // ======================
-  // ADMIN STATUS BUTTONS
-  // ======================
-  const setStatus = async (status) => {
-    try {
-      const res = await axios.get(
-        `${process.env.SHEET_API_URL}?update=true&id=${state.memberId}&status=${status}&code=${state.adminCode}`
-      );
-
-      delete userState[userId];
-
-      if (res.data.success) {
-        return ctx.reply(
-          `✅ Updated\nMember: ${state.memberId}\nStatus: ${status}`
-        );
-      }
-
-      return ctx.reply("❌ Update failed.");
-
-    } catch (err) {
-      delete userState[userId];
-      return ctx.reply("❌ Error updating member.");
-    }
-  };
-
-  bot.action("STATUS_ACTIVE", async (ctx) => {
-    await ctx.answerCbQuery();
-    await setStatus("Active");
-  });
-
-  bot.action("STATUS_PENDING", async (ctx) => {
-    await ctx.answerCbQuery();
-    await setStatus("Pending");
-  });
-
-  bot.action("STATUS_SUSPENDED", async (ctx) => {
-    await ctx.answerCbQuery();
-    await setStatus("Suspended");
-  });
-
-  bot.action("STATUS_REJECTED", async (ctx) => {
-    await ctx.answerCbQuery();
-    await setStatus("Rejected");
-  });
-
-  // ======================
-  // SUPPORT
-  // ======================
-  if (state.step === "support") {
-    delete userState[userId];
-
-    await ctx.telegram.sendMessage(
-      process.env.ADMIN_CHAT_ID,
-      `📩 SUPPORT\nFrom: @${ctx.from.username || "user"}\n\n${text}`
-    );
-
-    return ctx.reply("✅ Sent to admin.");
-  }
 });
 
 // ======================
-// GROUP MODERATION (UNCHANGED)
+// ADMIN ACTIONS
+// ======================
+const setStatus = async (ctx, status) => {
+  const userId = ctx.from.id;
+  const state = userState[userId];
+
+  try {
+    const res = await axios.get(
+      `${process.env.SHEET_API_URL}?update=true&id=${state.memberId}&status=${status}&code=${state.adminCode}`
+    );
+
+    delete userState[userId];
+
+    if (res.data.success) {
+      return ctx.reply(
+        `✅ Updated\nMember: ${state.memberId}\nStatus: ${status}`
+      );
+    }
+
+    return ctx.reply("❌ Update failed.");
+  } catch (err) {
+    delete userState[userId];
+    return ctx.reply("❌ Error updating member.");
+  }
+};
+
+bot.action("SEND_MEMBER_ID", async (ctx) => {
+  await ctx.answerCbQuery();
+  ctx.reply("📩 Enter Member ID:");
+});
+
+bot.action("STATUS_ACTIVE", async (ctx) => {
+  await ctx.answerCbQuery();
+  await setStatus(ctx, "Active");
+});
+
+bot.action("STATUS_PENDING", async (ctx) => {
+  await ctx.answerCbQuery();
+  await setStatus(ctx, "Pending");
+});
+
+bot.action("STATUS_SUSPENDED", async (ctx) => {
+  await ctx.answerCbQuery();
+  await setStatus(ctx, "Suspended");
+});
+
+bot.action("STATUS_REJECTED", async (ctx) => {
+  await ctx.answerCbQuery();
+  await setStatus(ctx, "Rejected");
+});
+
+// ======================
+// GROUP MODERATION
 // ======================
 bot.on("message", async (ctx) => {
   if (!ctx.message.text) return;
@@ -277,7 +289,6 @@ bot.on("message", async (ctx) => {
         await ctx.banChatMember(userId);
         delete warnings[userId];
       }
-
     } catch (err) {
       console.log(err);
     }
@@ -285,5 +296,13 @@ bot.on("message", async (ctx) => {
 });
 
 // ======================
+// START SERVERS
+// ======================
+const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, () => {
+  console.log("🌐 Express server running");
+});
+
 bot.launch();
 console.log("🚀 ATWOPAT Bot Running...");
